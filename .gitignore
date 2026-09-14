@@ -7,3 +7,5 @@ bronze_dados/
 __pycache__/
 
 urls.txt
+
+controle_fila.db

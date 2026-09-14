@@ -1,3 +1,4 @@
+import sqlite3
 import time
 import random
 import os
@@ -12,7 +13,8 @@ def aguardar_exec():
 
 def salvar_camada_bronze(html, empresa, hash_url):
     hoje = datetime.now()
-    caminho_pasta = os.path.join("bronze_dados", hoje.strftime("%Y"), hoje.strftime("%m"), hoje.strftime("%d"))
+    caminho_base = os.getenv("CAMINHO_DRIVE_BRONZE")
+    caminho_pasta = os.path.join(caminho_base, hoje.strftime("%Y"), hoje.strftime("%m"), hoje.strftime("%d"))
     os.makedirs(caminho_pasta, exist_ok=True)
     nome_arquivo = f"{empresa}_{hash_url}.html.gz"
     caminho_completo = os.path.join(caminho_pasta, nome_arquivo)
@@ -21,8 +23,23 @@ def salvar_camada_bronze(html, empresa, hash_url):
         f.write(html)
     print(f"arquivo salvo: {caminho_completo}")
 
-def processar_reclamacoes(lista_urls):
-    sb = sb_cdp.Chrome(locale="pt-BR")
+def consumir_fila():
+    estatisticas = {"baixados": 0, "erros": 0}
+    caminho_db = os.getenv("CAMINHO_DB")
+    
+    conexao = sqlite3.connect(caminho_db)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT hash_url, empresa, url_completa FROM fila_reclamacoes WHERE precisa_baixar = 1")
+    reclamacoes_pendentes = cursor.fetchall()
+    
+    if not reclamacoes_pendentes:
+        print('fila vazia')
+        conexao.close()
+        return estatisticas
+
+    print(f"encontradas {len(reclamacoes_pendentes)} reclamações na fila, scrapper iniciando")
+    
+    sb = sb_cdp.Chrome(locale="pt-BR",headless=True) #navegador camuflado do cloudflare
     endpoint_url = sb.get_endpoint_url()
     
     try:
@@ -31,16 +48,13 @@ def processar_reclamacoes(lista_urls):
             context = browser.contexts[0]
             pagina = context.pages[0]
 
-            for url in lista_urls:
-                url = url.strip()
-                if not url: continue
-                
+            for hash_url, empresa, url_completa in reclamacoes_pendentes:
                 try:
-                    print(f"\nurl acessada: {url}")
-                    pagina.goto(url)
+                    print(f"\nurl acessada: {url_completa}")
+                    pagina.goto(url_completa)
                     
-                    try: # detector de ad
-                        seletor_anuncio = 'button[data-ra-ads-interstitial-close]' #classe dos anuncios achada durante os testes
+                    try: 
+                        seletor_anuncio = 'button[data-ra-ads-interstitial-close]' 
                         pagina.wait_for_selector(seletor_anuncio, timeout=3000)
                         pagina.click(seletor_anuncio)
                         print("anuncio fechado")
@@ -49,17 +63,19 @@ def processar_reclamacoes(lista_urls):
                         pass
                     
                     pagina.wait_for_selector('p[data-testid="complaint-description"]', timeout=15000)
-                    
                     html_bruto = pagina.content()
-                    
-                    partes_url = url.strip('/').split('/')
-                    empresa = partes_url[3] if len(partes_url) > 3 else "desconhecida"
-                    hash_url = url.split('_')[-1].strip('/') if '_' in url else str(int(time.time()))
                     
                     salvar_camada_bronze(html_bruto, empresa, hash_url)
                     
+                    # atualização do banco
+                    cursor.execute("UPDATE fila_reclamacoes SET precisa_baixar = 0 WHERE hash_url = ?", (hash_url,))
+                    conexao.commit()
+                    
+                    estatisticas["baixados"] += 1
+                    
                 except Exception as e:
-                    print(f"falha ao processar {url}. erro: {e}")
+                    print(f"falha ao processar {url_completa}. erro: {e}")
+                    estatisticas["erros"] += 1
                 
                 aguardar_exec()
 
@@ -67,15 +83,6 @@ def processar_reclamacoes(lista_urls):
             
     finally:
         sb.driver.quit()
-
-if __name__ == "__main__":
-    if os.path.exists("urls.txt"):
-        with open("urls.txt", "r", encoding="utf-8") as arquivo:
-            urls_alvo = arquivo.readlines()
+        conexao.close()
         
-        if urls_alvo:
-            processar_reclamacoes(urls_alvo)
-        else:
-            print("arquivo de urls vazio")
-    else:
-        print("arquivo de url inexistente")
+    return estatisticas

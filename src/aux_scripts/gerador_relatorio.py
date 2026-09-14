@@ -33,6 +33,3 @@ def enviar_resumo_diario(qtd_novos_links, qtd_baixados, qtd_erros):
         servidor.quit()
     except Exception as e:
         print(f"erro: {e}")
-
-if __name__ == "__main__":
-    enviar_resumo_diario(15, 12, 0)

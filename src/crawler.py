@@ -89,7 +89,7 @@ def extrair_dados_da_pagina(pagina, empresa):
     return novos_links, erros
 
 def aguardar_exec():
-    tempo_espera = random.uniform(2.5, 6.0)
+    tempo_espera = random.uniform(7.0, 13.5)
     print(f"Aguardando {tempo_espera:.2f} segundos antes da próxima página...")
     time.sleep(tempo_espera)
 

@@ -8,7 +8,7 @@ def pipeline_diario():
     
    
     print("parte 1 - crawler")
-    stats_crawler = varrer_txt("urls.txt", paginas_por_empresa=2)
+    stats_crawler = varrer_txt("urls.txt", paginas_por_empresa=4)
     
     print("\nparte 2 - scraper")
     stats_scraper = consumir_fila()

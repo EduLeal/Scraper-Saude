@@ -1,4 +1,3 @@
-import sqlite3
 import time
 import random
 import os
@@ -6,6 +5,7 @@ from datetime import datetime
 from playwright.sync_api import sync_playwright
 from seleniumbase import sb_cdp
 from dotenv import load_dotenv
+from src.db import db_manager
 
 def inserir_fila_banco(hash_url, empresa, url_completa, status):
     data_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -80,8 +80,8 @@ def extrair_dados_da_pagina(pagina, empresa):
                 status = "Não Resolvido"    
             elif "resolvido" in texto_elemento:
                 status = "Resolvido"
-            novos_links += inserir_fila_banco(hash_url, empresa, url_reclamacao, status)
             
+            novos_links += db_manager.inserir_ou_atualizar_fila(hash_url, empresa, url_reclamacao, status)            
     except Exception as e:
         print(f"falha ao extrair a página: {e}")
         erros += 1

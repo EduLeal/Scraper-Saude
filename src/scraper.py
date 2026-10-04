@@ -41,7 +41,7 @@ def consumir_fila():
         numero_lote = (i // tamanho_batch) + 1
         print(f"\nbatch {numero_lote} (fila {i+1} a {i+len(lote_atual)})")
         
-        sb = sb_cdp.Chrome(locale="pt-BR", headless=True)
+        sb = sb_cdp.Chrome(locale="pt-BR", headless=False)
         endpoint_url = sb.get_endpoint_url()
         
         try:
@@ -53,7 +53,7 @@ def consumir_fila():
                 for hash_url, empresa, url_completa in lote_atual:
                     try:
                         print(f"\nurl acessada: {url_completa}")
-                        pagina.goto(url_completa)
+                        pagina.goto(url_completa, wait_until="domcontentloaded", timeout=60000)
                         
                         try: 
                             seletor_anuncio = 'button[data-ra-ads-interstitial-close]' 
@@ -65,19 +65,23 @@ def consumir_fila():
                             pass
                         
                         try:
-                            pagina.wait_for_selector('p[data-testid="complaint-description"]', timeout=15000)
+                            pagina.wait_for_selector('[data-testid="complaint-description"]', timeout=20000)
                             html_bruto = pagina.content()
                             salvar_camada_bronze(html_bruto, empresa, hash_url)
                             
                             db_manager.atualizar_status_baixado(hash_url)
                             
                         except:
-                            print(f"aviso: reclamação inativa/deletada. Atualizando status no banco.")
                             html_bruto = pagina.content()
-                            salvar_camada_bronze(html_bruto, empresa, hash_url)
+                            texto_pagina = html_bruto.lower()
                             
-                            db_manager.marcar_como_desativada(hash_url)
-                                                    
+                            if "desativada" in texto_pagina or "inativa" in texto_pagina:
+                                print("aviso: reclamação inativa/deletada comprovada. Atualizando status no banco.")
+                                salvar_camada_bronze(html_bruto, empresa, hash_url)
+                                db_manager.marcar_como_desativada(hash_url)
+                            else:
+                                raise Exception("descrição não carregou a tempo e o link não está desativado.")
+                                
                         estatisticas["baixados"] += 1
                         
                     except Exception as e:

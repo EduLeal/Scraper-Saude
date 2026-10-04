@@ -83,4 +83,6 @@ O banco central `controle_fila.db` possui a tabela `fila_reclamacoes` com a segu
 ## 📚 Fontes Úteis e Materiais de Apoio
 
 *   [Stealthy Playwright Mode: Bypass CAPTCHAs and Bot-Detection!](https://www.youtube.com/watch?v=PnFD_gSmGUc)
+*   [Playwright Docs](https://playwright.dev/python/docs/api/class-playwright)
+*   [Asyncio in Python - Full Tutorial](https://www.youtube.com/watch?v=Qb9s3UiMSTA)
 

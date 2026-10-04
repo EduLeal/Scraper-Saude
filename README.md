@@ -1,5 +1,3 @@
-# Scrapper-Telefonias
-
 # 🏥 Scraper Saúde - Monitoramento de Reclamações
 
 ## ⚠️ Aviso Legal e Conformidade com a LGPD

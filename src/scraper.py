@@ -1,4 +1,3 @@
-import sqlite3
 import time
 import random
 import os
@@ -6,6 +5,8 @@ import gzip
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 from seleniumbase import sb_cdp 
+from src.db import db_manager
+
 
 def aguardar_exec():
     tempo_espera = random.uniform(7.0,13.5)
@@ -25,16 +26,10 @@ def salvar_camada_bronze(html, empresa, hash_url):
 
 def consumir_fila():
     estatisticas = {"baixados": 0, "erros": 0}
-    caminho_db = os.getenv("CAMINHO_DB")
-    
-    conexao = sqlite3.connect(caminho_db)
-    cursor = conexao.cursor()
-    cursor.execute("SELECT hash_url, empresa, url_completa FROM fila_reclamacoes WHERE precisa_baixar = 1")
-    reclamacoes_pendentes = cursor.fetchall()
-    
+
+    reclamacoes_pendentes = db_manager.obter_pendentes()    
     if not reclamacoes_pendentes:
         print('fila vazia')
-        conexao.close()
         return estatisticas
 
     print(f"encontradas {len(reclamacoes_pendentes)} reclamações na fila, scrapper iniciando")
@@ -58,7 +53,7 @@ def consumir_fila():
                 for hash_url, empresa, url_completa in lote_atual:
                     try:
                         print(f"\nurl acessada: {url_completa}")
-                        pagina.goto(url_completa)
+                        pagina.goto(url_completa, wait_until="domcontentloaded", timeout=60000)
                         
                         try: 
                             seletor_anuncio = 'button[data-ra-ads-interstitial-close]' 
@@ -69,14 +64,24 @@ def consumir_fila():
                         except:
                             pass
                         
-                        pagina.wait_for_selector('p[data-testid="complaint-description"]', timeout=15000)
-                        html_bruto = pagina.content()
-                        
-                        salvar_camada_bronze(html_bruto, empresa, hash_url)
-                        
-                        cursor.execute("UPDATE fila_reclamacoes SET precisa_baixar = 0 WHERE hash_url = ?", (hash_url,))
-                        conexao.commit()
-                        
+                        try:
+                            pagina.wait_for_selector('[data-testid="complaint-description"]', timeout=20000)
+                            html_bruto = pagina.content()
+                            salvar_camada_bronze(html_bruto, empresa, hash_url)
+                            
+                            db_manager.atualizar_status_baixado(hash_url)
+                            
+                        except:
+                            html_bruto = pagina.content()
+                            texto_pagina = html_bruto.lower()
+                            
+                            if "desativada" in texto_pagina or "inativa" in texto_pagina:
+                                print("aviso: reclamação inativa/deletada comprovada. Atualizando status no banco.")
+                                salvar_camada_bronze(html_bruto, empresa, hash_url)
+                                db_manager.marcar_como_desativada(hash_url)
+                            else:
+                                raise Exception("descrição não carregou a tempo e o link não está desativado.")
+                                
                         estatisticas["baixados"] += 1
                         
                     except Exception as e:
@@ -95,5 +100,4 @@ def consumir_fila():
             print(f"\nbatch {numero_lote} concluído. aguardando {tempo_descanso:.1f} segundos...")
             time.sleep(tempo_descanso)
             
-    conexao.close()
     return estatisticas

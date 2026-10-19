@@ -1,49 +1,45 @@
-import time
-import random
+import asyncio
 import os
 from datetime import datetime
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 from seleniumbase import sb_cdp
 from dotenv import load_dotenv
 from src.db import db_manager
 
-def extrair_dados_da_pagina(pagina, empresa):
+load_dotenv()
+
+async def extrair_dados_da_pagina(pagina, empresa):
     novos_links = 0
     erros = 0
 
-    print(f"empresa: {empresa}...")
+    print(f"[{empresa.upper()}] Analisando página...")
     try:
         seletor_card_reclamacao = f'a[href^="/{empresa}/"]'
-        pagina.wait_for_selector(seletor_card_reclamacao, timeout=10000)
+        await pagina.wait_for_selector(seletor_card_reclamacao, timeout=15000)
         
-        elementos_links = pagina.locator(seletor_card_reclamacao).all()
-
-        endereco_base = os.getenv("ENDERECO_BASE_CRAWLER")
+        elementos_links = await pagina.locator(seletor_card_reclamacao).all()
+        endereco_base = os.getenv("ENDERECO_BASE_CRAWLER", "https://www.reclameaqui.com.br")
         
         for elemento in elementos_links:
-            href = elemento.get_attribute('href')
+            href = await elemento.get_attribute('href')
             if not href or '_' not in href:
                 continue
-            
             
             url_reclamacao = f"{endereco_base.rstrip('/')}/{href.lstrip('/')}"
             
             try:
                 hash_url = href.strip('/').split('_', 1)[1]
-                
-                if len(hash_url) < 10: #filtro de hashs muito curtos
-                    print(f"link filtrado: {url_reclamacao}")
+                if len(hash_url) < 10: 
                     continue
-                    
             except Exception:
                 continue
             
             status = "Pendente" 
-            
             try:
-                texto_elemento = elemento.locator('xpath=../../..').inner_text().lower()
+                texto_elemento = await elemento.locator('xpath=../../..').inner_text()
+                texto_elemento = texto_elemento.lower()
             except:
-                texto_elemento = elemento.inner_text().lower()
+                texto_elemento = (await elemento.inner_text()).lower()
             
             if "não respondida" in texto_elemento:
                 status = "Não Respondida"
@@ -54,76 +50,94 @@ def extrair_dados_da_pagina(pagina, empresa):
             elif "resolvido" in texto_elemento:
                 status = "Resolvido"
                 
-            novos_links += db_manager.inserir_ou_atualizar_fila(hash_url, empresa, url_reclamacao, status)            
+            inserido = await db_manager.inserir_ou_atualizar_fila(hash_url, empresa, url_reclamacao, status)
+            novos_links += inserido
+            
     except Exception as e:
-        print(f"falha ao extrair a página: {e}")
+        print(f"[{empresa.upper()}] Falha ao extrair a página: {e}")
         erros += 1
 
     return novos_links, erros
 
-def aguardar_exec():
-    tempo_espera = random.uniform(7.0, 13.5)
-    print(f"Aguardando {tempo_espera:.2f} segundos antes da próxima página...")
-    time.sleep(tempo_espera)
-
-def iniciar_crawler(empresa, url_base, total_paginas):
-    sb = sb_cdp.Chrome(locale="pt-BR", headless=False) #navegador camuflado do cloudflare
-    endpoint_url = sb.get_endpoint_url()
-
+async def processar_empresa(browser, url_base, total_paginas):
+    """Processa todas as páginas de uma empresa específica em uma aba isolada"""
+    # extrai o nome da empresa da URL
+    partes_url = url_base.strip('/').split('/')
+    empresa = partes_url[4] if len(partes_url) > 4 else "desconhecida"
+    
+    print(f"\n=== [CRAWLER] Iniciando empresa: {empresa.upper()} ===")
+    
+    # cria uma nova aba isolada dentro do mesmo navegador
+    pagina = await browser.new_page()
     estatisticas = {"novos": 0, "erros": 0}
     
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(endpoint_url)
-            context = browser.contexts[0]
-            pagina = context.pages[0]
-
-            for numero_pagina in range(1, total_paginas + 1):
-                url_paginada = f"{url_base}?pagina={numero_pagina}"
-                print(f"\npágina {numero_pagina}/{total_paginas} acessando: {url_paginada}")
+        for numero_pagina in range(1, total_paginas + 1):
+            url_paginada = f"{url_base}?pagina={numero_pagina}"
+            print(f"[{empresa.upper()}] Página {numero_pagina}/{total_paginas} acessando...")
+            
+            try:
+                await pagina.goto(url_paginada, wait_until="domcontentloaded", timeout=60000)
+                await asyncio.sleep(3) # pausa leve anti-bloqueio
                 
-                try:
-                    pagina.goto(url_paginada, wait_until="domcontentloaded", timeout=60000)
-                    time.sleep(5) 
-
-                    qtd_novos, qtd_erros = extrair_dados_da_pagina(pagina, empresa)
-                    estatisticas["novos"] += qtd_novos
-                    estatisticas["erros"] += qtd_erros
-
-                except Exception as e:
-                    print(f"erro ao processar a página {numero_pagina}: {e}")
-                    estatisticas["erros"] += 1
+                qtd_novos, qtd_erros = await extrair_dados_da_pagina(pagina, empresa)
+                estatisticas["novos"] += qtd_novos
+                estatisticas["erros"] += qtd_erros
                 
-                if numero_pagina < total_paginas:
-                    aguardar_exec()
-
-            browser.close()
+            except Exception as e:
+                print(f"[{empresa.upper()}] Erro ao processar a página {numero_pagina}: {e}")
+                estatisticas["erros"] += 1
+            
+            # pausa aleatória entre páginas da mesma empresa
+            if numero_pagina < total_paginas:
+                tempo_espera = asyncio.get_running_loop().time() # placeholder ou random uniform
+                await asyncio.sleep(5)
+                
     finally:
-        sb.driver.quit()
-
+        await pagina.close()
+        print(f"=== [CRAWLER] Finalizado: {empresa.upper()} ===")
+        
     return estatisticas
 
-def varrer_txt(caminho_txt, paginas_por_empresa=2):
+async def varrer_txt_async(caminho_txt, paginas_por_empresa=1):
+    """Lê o arquivo de URLs e dispara o Crawler de todas as empresas EM PARALELO"""
     total_estatisticas = {"novos": 0, "erros": 0}
     
     if not os.path.exists(caminho_txt):
-        print("arquivo de urls inexistente")
+        print("Arquivo de URLs inexistente.")
         return total_estatisticas
         
     with open(caminho_txt, "r", encoding="utf-8") as arquivo:
-        urls_alvo = arquivo.readlines()
+        urls_alvo = [linha.strip() for linha in arquivo.readlines() if linha.strip()]
         
-    for url in urls_alvo:
-        url = url.strip()
-        if not url: continue
-        
-        partes_url = url.strip('/').split('/')
-        empresa = partes_url[4] if len(partes_url) > 4 else "desconhecida"
-        
-        print(f"\n=== crawler apontado pra empresa: {empresa.upper()} ===")
-        resultado = iniciar_crawler(empresa, url, paginas_por_empresa)
-        
-        total_estatisticas["novos"] += resultado["novos"]
-        total_estatisticas["erros"] += resultado["erros"]
-        
+    if not urls_alvo:
+        return total_estatisticas
+
+    # inicia o SeleniumBase CDP para camuflagem contra o Cloudflare
+    sb = sb_cdp.Chrome(locale="pt-BR", headless=False) 
+    endpoint_url = sb.get_endpoint_url()
+    
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.connect_over_cdp(endpoint_url)
+            
+            # cria uma lista de tarefas assíncronas para rodar todas as empresas juntas
+            tarefas = [
+                processar_empresa(browser, url, paginas_por_empresa) 
+                for url in urls_alvo
+            ]
+            
+            resultados = await asyncio.gather(*tarefas)
+            
+            for res in resultados:
+                total_estatisticas["novos"] += res["novos"]
+                total_estatisticas["erros"] += res["erros"]
+                
+            await browser.close()
+    finally:
+        try:
+            sb.driver.quit()
+        except:
+            pass
+            
     return total_estatisticas
